@@ -4,7 +4,7 @@
   <i>The Windows 7 Minesweeper, on Linux</i>
 
   <p>
-    A faithful recreation of the Windows 7 Minesweeper built with Qt6, using the original game's artwork — the tiles, mines, flags, counters, and window frame are blitted from the sprite sheets extracted by <a href="https://github.com/Lmy0217/Minesweeper">Lmy0217/Minesweeper</a>. Best enjoyed with <a href="https://github.com/aeroshell-desktop/aerothemeplasma">AeroThemePlasma</a>.
+    A faithful recreation of the Windows 7 Minesweeper built with Qt6, using the original game's artwork - the tiles, mines, flags, counters, and window frame are blitted from the sprite sheets extracted by <a href="https://github.com/Lmy0217/Minesweeper">Lmy0217/Minesweeper</a>. Best enjoyed with <a href="https://github.com/aeroshell-desktop/aerothemeplasma">AeroThemePlasma</a>.
   </p>
 
 </div>
