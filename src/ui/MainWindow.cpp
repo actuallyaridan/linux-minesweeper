@@ -8,6 +8,11 @@
 #include "StatisticsDialog.h"
 
 #include <QApplication>
+#include <QDialog>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLayout>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
@@ -15,6 +20,7 @@
 #include <QSettings>
 #include <QShowEvent>
 #include <QTimer>
+#include <QVBoxLayout>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
@@ -305,13 +311,72 @@ void MainWindow::showHelp()
 
 void MainWindow::showAbout()
 {
-    QMessageBox::about(
-        this, tr("About Minesweeper"),
-        tr("<b>Linux Minesweeper</b><br>"
-           "A recreation of the Windows 7 Minesweeper for Linux, built with "
-           "Qt6, using the original game's artwork (as extracted by the "
-           "<a href=\"https://github.com/Lmy0217/Minesweeper\">"
-           "Lmy0217/Minesweeper</a> project)."
-           "<br><br>Part of the WSL (Windows-alike Software for Linux) "
-           "series."));
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("About Minesweeper"));
+    dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+    dlg.setFixedWidth(340);
+
+    auto *iconLabel = new QLabel;
+    iconLabel->setFixedSize(64, 64);
+    iconLabel->setPixmap(windowIcon().pixmap(64, 64));
+    iconLabel->setAlignment(Qt::AlignCenter);
+
+    auto *nameLabel = new QLabel(tr("Minesweeper"));
+    auto *companyLabel = new QLabel(QStringLiteral("@actuallyaridan"));
+    auto *versionLabel = new QLabel(tr("Version: 1.0.0"));
+
+    auto *infoLayout = new QVBoxLayout;
+    infoLayout->addWidget(nameLabel);
+    infoLayout->addWidget(companyLabel);
+    infoLayout->addWidget(versionLabel);
+    infoLayout->addStretch();
+
+    auto *topLayout = new QHBoxLayout;
+    topLayout->addWidget(iconLabel);
+    topLayout->addSpacing(8);
+    topLayout->addLayout(infoLayout);
+    topLayout->addStretch();
+
+    auto *sep = new QFrame;
+    sep->setFrameShape(QFrame::HLine);
+    sep->setFrameShadow(QFrame::Sunken);
+
+    auto *descLabel = new QLabel(
+        tr("Clear the minefield without detonating any of the hidden mines. "
+           "Left-click a square to uncover it, right-click to flag a mine."));
+    descLabel->setWordWrap(true);
+    descLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    descLabel->setContentsMargins(4, 4, 4, 4);
+
+    auto *creditsLabel = new QLabel(
+        tr("Recreated in Linux with Qt6, using the original Windows 7 artwork "
+           "and sounds (extracted by the Lmy0217/Minesweeper project). Best "
+           "enjoyed with AeroThemePlasma. Any Microsoft branding is used "
+           "solely for referential use only, and does not aim to usurp "
+           "copyrights from Microsoft."));
+    creditsLabel->setWordWrap(true);
+    creditsLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    creditsLabel->setContentsMargins(4, 4, 4, 4);
+
+    auto *okBtn = new QPushButton(tr("OK"));
+    okBtn->setFixedWidth(80);
+    okBtn->setDefault(true);
+    connect(okBtn, &QPushButton::clicked, &dlg, &QDialog::accept);
+
+    auto *btnLayout = new QHBoxLayout;
+    btnLayout->addStretch();
+    btnLayout->addWidget(okBtn);
+
+    auto *mainLayout = new QVBoxLayout(&dlg);
+    mainLayout->setContentsMargins(12, 12, 12, 12);
+    mainLayout->setSpacing(8);
+    mainLayout->addLayout(topLayout);
+    mainLayout->addWidget(sep);
+    mainLayout->addWidget(descLabel);
+    mainLayout->addWidget(creditsLabel);
+    mainLayout->addSpacing(4);
+    mainLayout->addLayout(btnLayout);
+
+    dlg.layout()->setSizeConstraint(QLayout::SetFixedSize);
+    dlg.exec();
 }
