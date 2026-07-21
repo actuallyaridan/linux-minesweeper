@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Minesweeper
+Comment=Avoid the mines and clear the minefield
+Exec=minesweeper
+Icon=kmines
+Terminal=false
+Type=Application
+Categories=Qt;Game;LogicGame;
