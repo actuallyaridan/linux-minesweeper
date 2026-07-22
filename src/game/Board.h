@@ -37,7 +37,9 @@ public:
     void toggleMark(int row, int col);
     // Reveal the covered neighbours of a revealed number whose mines are all
     // flagged (middle-click / both-buttons in the widget). Wrong flags lose.
-    void chord(int row, int col);
+    // Returns false when nothing could happen (not a number, or its flag
+    // count doesn't match), which the UI answers with the invalid-move sound.
+    bool chord(int row, int col);
 
     int rows() const { return m_rows; }
     int cols() const { return m_cols; }

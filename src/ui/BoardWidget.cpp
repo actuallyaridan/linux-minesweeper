@@ -16,13 +16,32 @@ namespace {
 // Windows 7's default window is scale 1 (DEFAULT_WNDSCALE = 18 in the
 // reference source), which is also the sprites' native size, so the
 // default view is a pixel-perfect 1:1 blit.
-constexpr int kDefaultCell = Sheet::kTile;
+constexpr int kDefaultCell = Theme::kTile;
 constexpr int kMinCell = 12;       // cells stay clickable when shrunk
 
 constexpr int kTickMs = 30;        // shared animation clock, ~one frame per tick
 constexpr int kRingStagger = 3;    // ticks between explosion distance rings
-constexpr int kRippleTicks = 10;   // a flood uncovers over roughly this many
-constexpr int kIntroMs = 550;      // deal-in length; Win7's 1100ms drags
+constexpr int kIntroMs = 700;      // deal-in wave spread; Win7's 1100ms drags
+
+// A flood-open melts outward from the click: the ripple ring advances a
+// tick per cell of distance, and each tile it reaches dissolves with a
+// quick linear alpha ramp (the shape of animationAlphaQuickFadeOut, at a
+// brisker clip than its half second).
+constexpr int kRippleStagger = 1;
+constexpr int kRippleFadeTicks = 150 / kTickMs;
+
+// Each tile fades in once its wave arrives, the shape of the original's
+// animationAlphaQuickFadeIn, quickened to match the tighter wave spread.
+// The waves overlap, so the front reads as a soft shimmer instead of a
+// hard edge.
+constexpr int kIntroFadeTicks = 300 / kTickMs;
+
+// The animation XMLs' timings, in ticks: the mine trip runs over one
+// second, the disarm beam its 38 frames over two, and the scan bar
+// sweeps the field in three.
+constexpr int kTripTicks = 1000 / kTickMs;
+constexpr int kDisarmTicks = 2000 / kTickMs;
+constexpr int kScanTicks = 3000 / kTickMs;
 
 // Widget size for a given cell size: the field plus the frame's gaps, which
 // scale with the cells like the original's wndScale does. Rounded up so a
@@ -30,11 +49,23 @@ constexpr int kIntroMs = 550;      // deal-in length; Win7's 1100ms drags
 // metrics() drop to cell - 1 and pad the matte instead).
 QSize sizeFor(int cell, int rows, int cols)
 {
-    const qreal f = qreal(cell) / Sheet::kTile;
+    const qreal f = qreal(cell) / Theme::kTile;
     return QSize(cell * cols
                      + qCeil((Sheet::kGapLeft + Sheet::kGapRight) * f),
                  cell * rows
                      + qCeil((Sheet::kGapTop + Sheet::kGapBottom) * f));
+}
+
+// One sprite cut from a sheet and smooth-scaled on its own, so the filter
+// can't bleed a neighbouring sprite into its edge pixels.
+QPixmap cutSprite(const QPixmap &sheet, const QRect &logical,
+                  const QSize &target)
+{
+    const int k = Theme::kScale;
+    return sheet
+        .copy(logical.x() * k, logical.y() * k, logical.width() * k,
+              logical.height() * k)
+        .scaled(target, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }
 
 } // namespace
@@ -57,6 +88,16 @@ BoardWidget::BoardWidget(Board *board, QWidget *parent)
     connect(m_board, &Board::cellsOpened, this, &BoardWidget::startRipple);
 }
 
+void BoardWidget::setStyles(Theme::BoardStyle board, Theme::GameStyle game)
+{
+    if (m_boardStyle == board && m_gameStyle == game)
+        return;
+    m_boardStyle = board;
+    m_gameStyle = game;
+    m_sprites.cell = 0;   // sprites belong to the old sheets; rebuild
+    update();
+}
+
 void BoardWidget::onBoardChanged()
 {
     // A reset (new game) arrives as a plain boardChanged; drop any running
@@ -70,9 +111,11 @@ void BoardWidget::clearAnimations()
 {
     m_boomActive = false;
     m_boomDone = false;
+    m_winActive = false;
+    m_winDone = false;
     m_introActive = false;
-    m_ripple.clear();
-    m_rippleHidden.clear();
+    m_rippleStart.clear();
+    m_ringStarts.clear();
     m_anim->stop();
 }
 
@@ -113,7 +156,8 @@ void BoardWidget::playIntro()
     const qreal perWave = qreal(kIntroMs) / kTickMs / (maxWave + 1);
     for (int &start : m_introStart)
         start = int(start * perWave);
-    m_introEnd = qMax(1, int((maxWave + 1) * perWave));
+    // The board is dealt once the last wave has arrived and faded in.
+    m_introEnd = qMax(1, int((maxWave + 1) * perWave)) + kIntroFadeTicks;
 
     m_introActive = true;
     m_tick = 0;
@@ -127,8 +171,8 @@ void BoardWidget::startExplosion()
     m_boomActive = true;
     m_boomDone = false;
     m_tick = 0;
-    m_ripple.clear();
-    m_rippleHidden.clear();
+    m_rippleStart.clear();
+    m_ringStarts.clear();
     m_boomStart.fill(-1, rows * cols);
 
     // The mine that was hit detonates first...
@@ -159,13 +203,17 @@ void BoardWidget::startExplosion()
         }
     }
     std::sort(rings.begin(), rings.end());
-    m_boomEnd = Sheet::kBoomFrames;
+    // Each ring's mines explode together, and the cascade is over when
+    // the last explosion has burnt through its second.
+    m_boomEnd = kTripTicks;
     for (int i = 0; i < m_boomStart.size(); ++i) {
         if (m_boomStart[i] <= -2) {
             const int ring = -2 - m_boomStart[i];
-            m_boomStart[i] = Sheet::kBoomFrames + 1
-                             + int(rings.indexOf(ring)) * kRingStagger;
-            m_boomEnd = qMax(m_boomEnd, m_boomStart[i] + Sheet::kBoomFrames);
+            const int start = kRingStagger * (1 + int(rings.indexOf(ring)));
+            m_boomStart[i] = start;
+            if (!m_ringStarts.contains(start))
+                m_ringStarts.append(start);
+            m_boomEnd = qMax(m_boomEnd, start + kTripTicks);
         }
     }
     if (!m_animationsEnabled) {
@@ -181,10 +229,51 @@ void BoardWidget::finishExplosionNow()
         return;
     m_tick = m_boomEnd;
     m_boomDone = true;
-    if (m_ripple.isEmpty())
-        m_anim->stop();
+    m_ringStarts.clear();
+    m_anim->stop();
     update();
     emit explosionFinished();
+}
+
+void BoardWidget::playWin()
+{
+    const int rows = m_board->rows();
+    const int cols = m_board->cols();
+    m_winActive = true;
+    m_winDone = false;
+    m_tick = 0;
+    m_rippleStart.clear();
+
+    // Each mine's disarm beam fires as the scan bar passes its row on the
+    // way up; the sweep is over when the bar tops out and the last beam
+    // has burnt through its two seconds.
+    m_disarmStart.fill(-1, rows * cols);
+    m_winEnd = kScanTicks;
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            if (!m_board->at(r, c).mine)
+                continue;
+            const int start = kScanTicks * (rows - r) / (rows + 1);
+            m_disarmStart[r * cols + c] = start;
+            m_winEnd = qMax(m_winEnd, start + kDisarmTicks);
+        }
+    }
+    if (!m_animationsEnabled) {
+        finishWinNow();
+        return;
+    }
+    m_anim->start();
+}
+
+void BoardWidget::finishWinNow()
+{
+    if (!m_winActive || m_winDone)
+        return;
+    m_tick = m_winEnd;
+    m_winDone = true;
+    m_anim->stop();
+    update();
+    emit winFinished();
 }
 
 void BoardWidget::startRipple(const QVector<QPoint> &order)
@@ -193,18 +282,23 @@ void BoardWidget::startRipple(const QVector<QPoint> &order)
         return;
     if (order.size() < 6)   // small opens just pop, like the original
         return;
-    m_ripple = order;
-    m_rippleShown = qMax(1, int(order.size()) / kRippleTicks);
-    rebuildRippleHidden();
-    m_anim->start();
-}
 
-void BoardWidget::rebuildRippleHidden()
-{
+    // Each opened tile dissolves with the original's quick alpha fade,
+    // starting when the ripple ring radiating out from the click reaches
+    // it, so the flood melts outward instead of popping in chunks.
+    if (!m_anim->isActive())
+        m_tick = 0;
     const int cols = m_board->cols();
-    m_rippleHidden.clear();
-    for (int i = m_rippleShown; i < m_ripple.size(); ++i)
-        m_rippleHidden.insert(m_ripple[i].y() * cols + m_ripple[i].x());
+    const QPoint origin = order.first();
+    m_rippleEnd = m_tick;
+    for (const QPoint &pt : order) {
+        const int ring = qMax(qAbs(pt.x() - origin.x()),
+                              qAbs(pt.y() - origin.y()));
+        const int start = m_tick + ring * kRippleStagger;
+        m_rippleStart.insert(pt.y() * cols + pt.x(), start);
+        m_rippleEnd = qMax(m_rippleEnd, start + kRippleFadeTicks);
+    }
+    m_anim->start();
 }
 
 void BoardWidget::animTick()
@@ -220,6 +314,8 @@ void BoardWidget::animTick()
     }
 
     if (m_boomActive && !m_boomDone) {
+        if (m_ringStarts.contains(m_tick))
+            emit mineTripped();
         if (m_tick >= m_boomEnd) {
             m_boomDone = true;
             emit explosionFinished();
@@ -228,15 +324,20 @@ void BoardWidget::animTick()
         }
     }
 
-    if (!m_ripple.isEmpty()) {
-        m_rippleShown += qMax(1, int(m_ripple.size()) / kRippleTicks);
-        if (m_rippleShown >= m_ripple.size()) {
-            m_ripple.clear();
-            m_rippleHidden.clear();
+    if (m_winActive && !m_winDone) {
+        if (m_tick >= m_winEnd) {
+            m_winDone = true;
+            emit winFinished();
         } else {
-            rebuildRippleHidden();
             active = true;
         }
+    }
+
+    if (!m_rippleStart.isEmpty()) {
+        if (m_tick >= m_rippleEnd)
+            m_rippleStart.clear();
+        else
+            active = true;
     }
 
     if (!active)
@@ -277,10 +378,10 @@ QSize BoardWidget::snappedSize(const QSize &avail) const
     if (rows <= 0 || cols <= 0)
         return {};
     const qreal fitW = qreal(avail.width())
-        / (Sheet::kTile * cols + Sheet::kGapLeft + Sheet::kGapRight);
+        / (Theme::kTile * cols + Sheet::kGapLeft + Sheet::kGapRight);
     const qreal fitH = qreal(avail.height())
-        / (Sheet::kTile * rows + Sheet::kGapTop + Sheet::kGapBottom);
-    const int cell = qMax(kMinCell, int(Sheet::kTile * qMin(fitW, fitH)));
+        / (Theme::kTile * rows + Sheet::kGapTop + Sheet::kGapBottom);
+    const int cell = qMax(kMinCell, int(Theme::kTile * qMin(fitW, fitH)));
     return sizeFor(cell, rows, cols);
 }
 
@@ -295,11 +396,11 @@ BoardWidget::Metrics BoardWidget::metrics() const
     // The zoom that fits field + gaps into the widget; the integer cell size
     // keeps sprite edges on pixel boundaries, and the gaps follow it.
     const qreal fitW = qreal(width())
-        / (Sheet::kTile * cols + Sheet::kGapLeft + Sheet::kGapRight);
+        / (Theme::kTile * cols + Sheet::kGapLeft + Sheet::kGapRight);
     const qreal fitH = qreal(height())
-        / (Sheet::kTile * rows + Sheet::kGapTop + Sheet::kGapBottom);
-    m.cell = qMax(8, int(Sheet::kTile * qMin(fitW, fitH)));
-    m.f = qreal(m.cell) / Sheet::kTile;
+        / (Theme::kTile * rows + Sheet::kGapTop + Sheet::kGapBottom);
+    m.cell = qMax(8, int(Theme::kTile * qMin(fitW, fitH)));
+    m.f = qreal(m.cell) / Theme::kTile;
 
     // Centre the field in the content area between the frame's edges.
     const qreal left = Sheet::kGapLeft * m.f;
@@ -321,13 +422,75 @@ QPoint BoardWidget::cellAt(const QPoint &pos) const
                   (pos.y() - m.grid.top()) / m.cell);
 }
 
-const QPixmap &BoardWidget::scaledSheet(int cell) const
+const BoardWidget::SpriteSet &BoardWidget::sprites() const
 {
-    if (m_scaledCell != cell) {
-        m_scaled = Sheet::scaledTiles(cell);
-        m_scaledCell = cell;
-    }
-    return m_scaled;
+    const int cell = metrics().cell;
+    if (m_sprites.cell == cell)
+        return m_sprites;
+
+    const QPixmap &board = Theme::boardSheet(m_boardStyle);
+    const QPixmap &game = Theme::gameSheet(m_gameStyle);
+    SpriteSet &S = m_sprites;
+    S.cell = cell;
+
+    // The two 720-frame gradient blocks are scaled in one piece: adjacent
+    // frames are near-identical colours, so the filter's cross-frame
+    // sampling is invisible, and one big scale beats 1440 little ones.
+    S.normal = cutSprite(board, QRect(0, 0, 25 * 18, 29 * 18),
+                         QSize(25 * cell, 29 * cell));
+    S.pressed = cutSprite(board, QRect(500, 0, 25 * 18, 29 * 18),
+                          QSize(25 * cell, 29 * cell));
+
+    const QSize tile(cell, cell);
+    S.flag = cutSprite(board, Theme::kFlag, tile);
+    S.question = cutSprite(board, Theme::kQuestion, tile);
+    S.hilite = cutSprite(board, Theme::kHilite, tile);
+    S.misflagX = cutSprite(board, Theme::kMisflagX, tile);
+    S.mine = cutSprite(game, Theme::kMine, tile);
+
+    // What a detonated mine (or tripped flower) leaves behind: a faint,
+    // washed-out ghost of the sprite, grey for most and a soft red wash
+    // for the one that was clicked. The alpha is reapplied after the
+    // multiply (which would otherwise colour the clear parts), then thinned.
+    const auto remnant = [&](const QColor &wash, bool drain, int alpha) {
+        QImage img = S.mine.toImage().convertToFormat(QImage::Format_ARGB32);
+        if (drain) {   // drain the colour to grey, pixel by pixel
+            for (int y = 0; y < img.height(); ++y) {
+                QRgb *line = reinterpret_cast<QRgb *>(img.scanLine(y));
+                for (int x = 0; x < img.width(); ++x) {
+                    const int g = qGray(line[x]);
+                    line[x] = qRgba(g, g, g, qAlpha(line[x]));
+                }
+            }
+        }
+        QPixmap out = QPixmap::fromImage(img);
+        QPainter tint(&out);
+        tint.setCompositionMode(QPainter::CompositionMode_Multiply);
+        tint.fillRect(out.rect(), wash);
+        tint.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+        tint.drawPixmap(0, 0, S.mine);
+        tint.fillRect(out.rect(), QColor(0, 0, 0, alpha));
+        return out;
+    };
+    S.crater = remnant(QColor(175, 175, 175), true, 140);
+    S.craterRed = remnant(QColor(255, 96, 96), false, 160);
+
+    const int t = qMax(1, qRound(cell * 3.0 / Theme::kTile));
+    S.shadowU = cutSprite(board, Theme::kShadowU, QSize(cell, t));
+    S.shadowL = cutSprite(board, Theme::kShadowL, QSize(t, cell));
+
+    const qreal f = qreal(cell) / Theme::kTile;
+    for (int n = 1; n <= 8; ++n)
+        S.digits[n - 1] = cutSprite(board, Theme::digit(n),
+                                    QSize(qMax(2, qRound(10 * f)),
+                                          qMax(2, qRound(13 * f))));
+    return S;
+}
+
+QRect BoardWidget::tileSrc(const QPixmap &, int frame) const
+{
+    const int cell = m_sprites.cell;
+    return QRect(cell * (frame % 25), cell * (frame / 25), cell, cell);
 }
 
 void BoardWidget::paintBackdrop(QPainter &p, const Metrics &m) const
@@ -347,8 +510,7 @@ void BoardWidget::paintBackdrop(QPainter &p, const Metrics &m) const
 
     // Centre first, then the 9-patch edges. The centre is plain white in the
     // source, but black hides the sliver left uncovered when the window's
-    // proportions drift a pixel from the field's. The edge strips are clean:
-    // the sprites stashed in the source's centre sit outside every strip.
+    // proportions drift a pixel from the field's.
     p.fillRect(QRectF(L, T, w - L - R, h - T - B), Qt::black);
     const int eW = Sheet::kFrameW - Sheet::kGapLeft - Sheet::kGapRight;
     const int eH = Sheet::kFrameH - Sheet::kGapTop - Sheet::kGapBottom;
@@ -369,32 +531,221 @@ void BoardWidget::paintBackdrop(QPainter &p, const Metrics &m) const
     p.drawPixmap(QRectF(w - R, T, R, h - T - B), fr,
                  QRectF(sR, Sheet::kGapTop, Sheet::kGapRight, eH));
 
-    // The status strip in the bottom border: clock button + time on the
-    // left, mines-remaining + mine button on the right.
-    const qreal button = 25 * f;
-    const qreal boxW = 40 * f;
-    const qreal boxH = 22 * f;
-    const qreal inset = 20 * f;
-    const qreal yButton = h - B + (B - button) / 2;
-    const qreal yBox = h - B + (B - boxH) / 2;
+    // The status strip in the bottom border, laid out like the original's
+    // MINESWEEPER.xml CustomLayout: X offsets from the window's centre,
+    // Y offsets from its bottom. Clock icon and time on the left, mine
+    // count and the game style's mine (or flower) icon on the right.
+    const QPixmap &other = Theme::otherSheet();
+    const QPixmap &game = Theme::gameSheet(m_gameStyle);
+    const QPixmap &board = Theme::boardSheet(m_boardStyle);
+    const int k = Theme::kScale;
+    const qreal cx = w / 2;
 
-    p.drawPixmap(QRectF(inset, yButton, button, button), Sheet::clockButton(),
-                 Sheet::clockButton().rect());
-    const QRectF timeBox(inset + button + 2 * f, yBox, boxW, boxH);
-    p.drawPixmap(timeBox, Sheet::counterBox(), Sheet::counterBox().rect());
-    p.drawPixmap(QRectF(w - inset - button, yButton, button, button),
-                 Sheet::mineButton(), Sheet::mineButton().rect());
-    const QRectF mineBox(w - inset - button - 2 * f - boxW, yBox, boxW, boxH);
-    p.drawPixmap(mineBox, Sheet::counterBox(), Sheet::counterBox().rect());
+    const auto place = [&](qreal x, qreal y, const QRect &logical) {
+        return QRectF(cx + x * f, h + y * f, logical.width() * f,
+                      logical.height() * f);
+    };
+    p.drawPixmap(place(-90, -30, Theme::kClock), other,
+                 QRectF(Theme::kClock.x() * k, Theme::kClock.y() * k,
+                        Theme::kClock.width() * k, Theme::kClock.height() * k));
+    p.drawPixmap(place(64, -30, Theme::kPanelMine), game,
+                 QRectF(Theme::kPanelMine.x() * k, Theme::kPanelMine.y() * k,
+                        Theme::kPanelMine.width() * k,
+                        Theme::kPanelMine.height() * k));
+    const QRectF panelSrc(Theme::kCounterPanel.x() * k,
+                          Theme::kCounterPanel.y() * k,
+                          Theme::kCounterPanel.width() * k,
+                          Theme::kCounterPanel.height() * k);
+    const QRectF timeBox = place(-59, -26, Theme::kCounterPanel);
+    const QRectF mineBox = place(18, -26, Theme::kCounterPanel);
+    p.drawPixmap(timeBox, board, panelSrc);
+    p.drawPixmap(mineBox, board, panelSrc);
 
     QFont font = p.font();
     font.setBold(true);
     font.setPixelSize(qMax(9, int(12 * f)));
     p.setFont(font);
-    p.setPen(QColor(196, 218, 235));   // the original's counter text colour
+    p.setPen(Qt::white);   // PanelLabelTextColor in the original's config
     p.drawText(timeBox, Qt::AlignCenter, QString::number(m_seconds));
     p.drawText(mineBox, Qt::AlignCenter,
                QString::number(m_board->minesRemaining()));
+}
+
+void BoardWidget::paintCell(QPainter &p, const Metrics &m, int r, int c) const
+{
+    const SpriteSet &S = sprites();
+    const int cs = m.cell;
+    const QRect rect(m.grid.left() + c * cs, m.grid.top() + r * cs, cs, cs);
+    const Cell &cell = m_board->at(r, c);
+    const int idx = r * m_board->cols() + c;
+    const int frame = Theme::gradientFrame(r, c, m_board->rows(),
+                                           m_board->cols());
+    const bool over = m_board->over();
+
+    // During the deal-in, tiles whose wave hasn't arrived still lie
+    // pressed flat; when it does, each tile fades in over the flat floor,
+    // like the original's quick alpha fade.
+    if (m_introActive && !cell.revealed) {
+        const int dt = m_tick - m_introStart[idx];
+        if (dt < kIntroFadeTicks) {
+            p.drawPixmap(rect, S.pressed, tileSrc(S.pressed, frame));
+            if (dt > 0) {
+                p.setOpacity(qreal(dt) / kIntroFadeTicks);
+                p.drawPixmap(rect, S.normal, tileSrc(S.normal, frame));
+                p.setOpacity(1.0);
+            }
+            return;
+        }
+    }
+
+    // A flood ripple: just-opened cells stay covered until the ring
+    // radiating from the click reaches them, then their tile dissolves
+    // over the floor (`cover` is the fading tile's remaining opacity,
+    // painted over the opened cell at the end).
+    qreal cover = 0.0;
+    if (cell.revealed && !m_rippleStart.isEmpty()) {
+        const auto it = m_rippleStart.constFind(idx);
+        if (it != m_rippleStart.constEnd()) {
+            const int dt = m_tick - it.value();
+            if (dt <= 0) {
+                p.drawPixmap(rect, S.normal, tileSrc(S.normal, frame));
+                return;
+            }
+            if (dt < kRippleFadeTicks)
+                cover = 1.0 - qreal(dt) / kRippleFadeTicks;
+        }
+    }
+
+    if (!cell.revealed) {
+        const bool pressTarget =
+            !over && m_mode != Press::None && m_press.x() >= 0
+            && cell.mark != Mark::Flag
+            && (m_mode == Press::Single
+                    ? m_press == QPoint(c, r)
+                    : qAbs(m_press.x() - c) <= 1 && qAbs(m_press.y() - r) <= 1);
+        const bool hovered = !over && m_mode == Press::None
+                             && m_hover == QPoint(c, r);
+
+        if (pressTarget) {
+            p.drawPixmap(rect, S.pressed, tileSrc(S.pressed, frame));
+        } else {
+            p.drawPixmap(rect, S.normal, tileSrc(S.normal, frame));
+            if (hovered) {
+                // The hover glow is additive, like the original engine
+                // blends its hilite sprite.
+                p.save();
+                p.setCompositionMode(QPainter::CompositionMode_Plus);
+                p.drawPixmap(rect, S.hilite);
+                p.restore();
+            }
+        }
+        if (cell.mark == Mark::Flag)
+            p.drawPixmap(rect, S.flag);
+        else if (cell.mark == Mark::Question)
+            p.drawPixmap(rect, S.question);
+        if (cell.misflagged)   // loss reveal: the wrong flag gets crossed out
+            p.drawPixmap(rect, S.misflagX);
+        return;
+    }
+
+    // A mine the loss cascade hasn't reached yet still hides under its
+    // tile; the pops radiate outward from the one that was hit.
+    if (m_boomActive && !m_boomDone && cell.mine
+        && m_tick < m_boomStart[idx]) {
+        p.drawPixmap(rect, S.normal, tileSrc(S.normal, frame));
+        return;
+    }
+
+    // Opened floor: the pressed gradient tile, with the shadows cast by
+    // still-raised neighbours (and the frame along the field's edge).
+    p.drawPixmap(rect, S.pressed, tileSrc(S.pressed, frame));
+
+    const auto casts = [&](int rr, int cc) {
+        return !m_board->at(rr, cc).revealed;
+    };
+    const bool top = (r == 0) || casts(r - 1, c);
+    const bool left = (c == 0) || casts(r, c - 1);
+    const int t = S.shadowU.height();
+    if (top)
+        p.drawPixmap(rect.topLeft(), S.shadowU);
+    if (left) {
+        if (top)   // don't double-darken the shared corner
+            p.drawPixmap(rect.left(), rect.top() + t, S.shadowL,
+                         0, t, t, cs - t);
+        else
+            p.drawPixmap(rect.topLeft(), S.shadowL);
+    }
+
+    if (cell.mine) {
+        // Loss reveal: once this mine's turn comes its crater sits on the
+        // floor and the explosion (painted over the grid) plays on top,
+        // the fading smoke uncovering the remnant. A flower blooms up from
+        // nothing, so it appears only once its animation has finished.
+        if (!m_boomActive) {   // shouldn't happen; never leave a bare floor
+            p.drawPixmap(rect, S.mine);
+            return;
+        }
+        const bool started = m_boomDone || m_tick >= m_boomStart[idx];
+        const bool finished = m_boomDone
+                              || m_tick >= m_boomStart[idx] + kTripTicks;
+        if (m_gameStyle == Theme::GameStyle::Flowers ? finished : started)
+            p.drawPixmap(rect, cell.exploded ? S.craterRed : S.crater);
+    } else if (cell.adjacent > 0) {
+        const QPixmap &d = S.digits[cell.adjacent - 1];
+        p.drawPixmap(rect.left() + (cs - d.width()) / 2,
+                     rect.top() + (cs - d.height()) / 2, d);
+    }
+
+    // The dissolving tile of a flood ripple, over everything the cell
+    // just revealed.
+    if (cover > 0.0) {
+        p.setOpacity(cover);
+        p.drawPixmap(rect, S.normal, tileSrc(S.normal, frame));
+        p.setOpacity(1.0);
+    }
+}
+
+void BoardWidget::paintWinSweep(QPainter &p, const Metrics &m) const
+{
+    if (!m_winActive || m_winDone)
+        return;
+    const QPixmap &other = Theme::otherSheet();
+    const int k = Theme::kScale;
+    p.save();
+    p.setClipRect(m.grid);
+
+    // Disarm beams above every mine the scan bar has passed.
+    for (int i = 0; i < m_disarmStart.size(); ++i) {
+        const int start = m_disarmStart[i];
+        if (start < 0 || m_tick < start || m_tick >= start + kDisarmTicks)
+            continue;
+        const int frame = qMin(Theme::kDisarmFrames - 1,
+                               (m_tick - start) * Theme::kDisarmFrames
+                                   / kDisarmTicks);
+        const QRect src = Theme::disarmFrame(m_boardStyle, frame);
+        const int r = i / m_board->cols();
+        const int c = i % m_board->cols();
+        const QRectF dst(m.grid.left() + c * m.cell
+                             + Theme::kDisarmOffset.x() * m.f,
+                         m.grid.top() + r * m.cell
+                             + Theme::kDisarmOffset.y() * m.f,
+                         src.width() * m.f, src.height() * m.f);
+        p.drawPixmap(dst, other,
+                     QRectF(src.x() * k, src.y() * k, src.width() * k,
+                            src.height() * k));
+    }
+
+    // The scan bar itself, sweeping from below the field to above it.
+    if (m_tick <= kScanTicks) {
+        const QRect src = Theme::kScanBar;
+        const qreal barH = qreal(m.grid.width()) * src.height() / src.width();
+        const qreal y = m.grid.bottom()
+                        - (m.grid.height() + barH) * m_tick / kScanTicks;
+        p.drawPixmap(QRectF(m.grid.left(), y, m.grid.width(), barH), other,
+                     QRectF(src.x() * k, src.y() * k, src.width() * k,
+                            src.height() * k));
+    }
+    p.restore();
 }
 
 void BoardWidget::paintEvent(QPaintEvent *)
@@ -405,119 +756,37 @@ void BoardWidget::paintEvent(QPaintEvent *)
     if (m.grid.isEmpty())
         return;
 
-    const QPixmap &sheet = scaledSheet(m.cell);
-    const int cs = m.cell;
-    const bool lost = m_board->state() == Board::State::Lost;
-    const bool over = m_board->over();
+    for (int r = 0; r < m_board->rows(); ++r)
+        for (int c = 0; c < m_board->cols(); ++c)
+            paintCell(p, m, r, c);
 
-    // A raised tile casts a shadow onto opened neighbours below/right of it;
-    // the frame does the same along the field's top/left edge. Mines shown
-    // on their tiles after a loss still count as raised; a misflag doesn't,
-    // it opens into the crossed-out-mine floor sprite.
-    const auto casts = [&](int r, int c) {
-        const Cell &cell = m_board->at(r, c);
-        return (!cell.revealed && !cell.misflagged)
-               || (cell.revealed && cell.mine);
-    };
-
-    for (int r = 0; r < m_board->rows(); ++r) {
-        for (int c = 0; c < m_board->cols(); ++c) {
-            const QRect rect(m.grid.left() + c * cs, m.grid.top() + r * cs,
-                             cs, cs);
-            const Cell &cell = m_board->at(r, c);
-            const int idx = r * m_board->cols() + c;
-
-            // During the deal-in, tiles whose wave hasn't arrived still lie
-            // pressed flat.
-            if (m_introActive && !cell.revealed && m_introStart[idx] > m_tick) {
-                p.drawPixmap(rect, sheet,
-                             QRect(Sheet::BrickDown.col * cs,
-                                   Sheet::BrickDown.row * cs, cs, cs));
+    // The loss cascade's explosions, painted over the grid so each
+    // fireball can spill across its neighbours' tiles; the craters
+    // underneath are the grid pass's business.
+    if (m_boomActive && !m_boomDone) {
+        const QPixmap &other = Theme::otherSheet();
+        const int k = Theme::kScale;
+        const QPoint off = Theme::tripOffset(m_gameStyle);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        for (int i = 0; i < m_boomStart.size(); ++i) {
+            if (m_boomStart[i] < 0 || m_tick < m_boomStart[i]
+                || m_tick >= m_boomStart[i] + kTripTicks)
                 continue;
-            }
-
-            // A flood ripple keeps just-opened cells looking covered until
-            // their breadth-first turn comes up.
-            if (cell.revealed && !m_rippleHidden.isEmpty()
-                && m_rippleHidden.contains(idx)) {
-                p.drawPixmap(rect, sheet,
-                             QRect(Sheet::Brick.col * cs,
-                                   Sheet::Brick.row * cs, cs, cs));
-                continue;
-            }
-
-            // A cascading mine draws its current explosion frame; frame 0
-            // is the resting mine, so pre-detonation cells look normal.
-            if (m_boomActive && cell.mine && cell.mark != Mark::Flag
-                && m_boomStart[idx] >= 0) {
-                const int f = qBound(0, m_tick - m_boomStart[idx],
-                                     Sheet::kBoomFrames);
-                const Sheet::Sprite s = cell.exploded ? Sheet::RedMineBoom(f)
-                                                      : Sheet::MineBoom(f);
-                p.drawPixmap(rect, sheet,
-                             QRect(s.col * cs, s.row * cs, cs, cs));
-                continue;
-            }
-
-            const bool pressTarget =
-                m_mode != Press::None && m_press.x() >= 0
-                && (m_mode == Press::Single
-                        ? m_press == QPoint(c, r)
-                        : qAbs(m_press.x() - c) <= 1 && qAbs(m_press.y() - r) <= 1);
-            const bool hovered = !over && m_mode == Press::None
-                                 && m_hover == QPoint(c, r);
-
-            Sheet::Sprite s = Sheet::Brick;
-            bool opened = false;   // drawn as floor -> receives shadows
-            if (cell.misflagged) {
-                s = Sheet::Misflag;
-                opened = true;
-            } else if (lost && cell.mine && cell.mark != Mark::Flag) {
-                s = cell.exploded ? Sheet::RedMineBrick : Sheet::MineBrick;
-            } else if (cell.revealed) {
-                s = cell.adjacent > 0 ? Sheet::Number(cell.adjacent)
-                                      : Sheet::Floor;
-                opened = true;
-            } else if (cell.mark == Mark::Flag) {
-                s = pressTarget ? Sheet::FlagDown
-                    : hovered   ? Sheet::FlagHover
-                                : Sheet::Flag;
-            } else if (cell.mark == Mark::Question) {
-                s = pressTarget ? Sheet::QuestionDown
-                    : hovered   ? Sheet::QuestionHover
-                                : Sheet::Question;
-                opened = pressTarget;
-            } else {
-                s = pressTarget ? Sheet::BrickDown
-                    : hovered   ? Sheet::BrickHover
-                                : Sheet::Brick;
-                opened = pressTarget;
-            }
-            p.drawPixmap(rect, sheet,
-                         QRect(s.col * cs, s.row * cs, cs, cs));
-
-            if (!opened)
-                continue;
-
-            // The shadow strips live in sheet column 2, rows 1-3: top-only,
-            // left-only, and the combined corner. 3px thick at native size.
-            const bool top = (r == 0) || casts(r - 1, c);
-            const bool left = (c == 0) || casts(r, c - 1);
-            const qreal t = cs * 3.0 / Sheet::kTile;
-            if (top && left) {
-                p.drawPixmap(QRectF(rect.left(), rect.top(), cs, t), sheet,
-                             QRectF(2 * cs, 3 * cs, cs, t));
-                p.drawPixmap(QRectF(rect.left(), rect.top() + t, t, cs - t),
-                             sheet, QRectF(2 * cs, 3 * cs + t, t, cs - t));
-            } else if (top) {
-                p.drawPixmap(QRectF(rect.left(), rect.top(), cs, t), sheet,
-                             QRectF(2 * cs, 1 * cs, cs, t));
-            } else if (left) {
-                p.drawPixmap(QRectF(rect.left(), rect.top(), t, cs), sheet,
-                             QRectF(2 * cs, 2 * cs, t, cs));
-            }
+            const int frame = (m_tick - m_boomStart[i]) * Theme::kTripFrames
+                              / kTripTicks;
+            const QRect src = Theme::tripFrame(m_gameStyle, frame);
+            const int r = i / m_board->cols();
+            const int c = i % m_board->cols();
+            const QRectF dst(m.grid.left() + c * m.cell + off.x() * m.f,
+                             m.grid.top() + r * m.cell + off.y() * m.f,
+                             src.width() * m.f, src.height() * m.f);
+            p.drawPixmap(dst, other,
+                         QRectF(src.x() * k, src.y() * k, src.width() * k,
+                                src.height() * k));
         }
     }
+
+    paintWinSweep(p, m);
 
     if (m_flagOverlay)
         Sprites::paintBosniaFlag(p, m.grid);
@@ -531,6 +800,7 @@ void BoardWidget::mousePressEvent(QMouseEvent *event)
     }
     if (m_board->over()) {
         finishExplosionNow();   // a click skips the cascade, like Win7
+        finishWinNow();
         return;
     }
     const QPoint c = cellAt(event->pos());
@@ -577,8 +847,10 @@ void BoardWidget::mouseReleaseEvent(QMouseEvent *event)
     if (m_mode == Press::Chord) {
         // Fire on the first button released; the second release finds
         // m_mode already back to None and does nothing.
-        if (m_press.x() >= 0 && !m_board->over())
-            m_board->chord(m_press.y(), m_press.x());
+        if (m_press.x() >= 0 && !m_board->over()) {
+            if (!m_board->chord(m_press.y(), m_press.x()))
+                emit invalidMove();
+        }
         m_mode = Press::None;
         m_press = QPoint(-1, -1);
     } else if (m_mode == Press::Single && event->button() == Qt::LeftButton) {

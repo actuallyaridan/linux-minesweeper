@@ -156,13 +156,13 @@ void Board::toggleMark(int row, int col)
     emit boardChanged();
 }
 
-void Board::chord(int row, int col)
+bool Board::chord(int row, int col)
 {
     if (m_state != State::Playing)
-        return;
+        return false;
     const Cell &c = at(row, col);
     if (!c.revealed || c.adjacent == 0)
-        return;
+        return false;
 
     int flags = 0;
     forNeighbors(row, col, [&](int r, int cc) {
@@ -170,7 +170,7 @@ void Board::chord(int row, int col)
             ++flags;
     });
     if (flags != c.adjacent)
-        return;
+        return false;
 
     // A wrong flag means an unflagged neighbour is a mine: every such mine
     // goes off at once, then the loss reveal shows them all.
@@ -195,6 +195,7 @@ void Board::chord(int row, int col)
         checkWin();
     }
     emit boardChanged();
+    return true;
 }
 
 void Board::lose()

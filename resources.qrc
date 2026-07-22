@@ -1,13 +1,25 @@
 <RCC>
     <qresource prefix="/assets">
-        <file alias="Minesweeper.bmp">assets/Minesweeper.bmp</file>
         <file alias="Frame.bmp">assets/Frame.bmp</file>
         <file alias="Minesweeper.ico">assets/Minesweeper.ico</file>
-        <file alias="firstPaint.wav">assets/firstPaint.wav</file>
-        <file alias="zeroDevelop.wav">assets/zeroDevelop.wav</file>
+        <file alias="blueSheet.png">assets/blueSheet.png</file>
+        <file alias="greenSheet.png">assets/greenSheet.png</file>
+        <file alias="otherSheet.png">assets/otherSheet.png</file>
+        <file alias="flowerGardenSheet.png">assets/flowerGardenSheet.png</file>
+        <file alias="minesweeperSheet.png">assets/minesweeperSheet.png</file>
+        <file alias="thumbBlue.png">assets/thumbBlue.png</file>
+        <file alias="thumbGreen.png">assets/thumbGreen.png</file>
+        <file alias="thumbMines.png">assets/thumbMines.png</file>
+        <file alias="thumbFlowers.png">assets/thumbFlowers.png</file>
+        <file alias="gameStart.wav">assets/gameStart.wav</file>
+        <file alias="tileSingle.wav">assets/tileSingle.wav</file>
+        <file alias="tileMultiple.wav">assets/tileMultiple.wav</file>
+        <file alias="gameWin.wav">assets/gameWin.wav</file>
+        <file alias="gameLose.wav">assets/gameLose.wav</file>
+        <file alias="invalidMove.wav">assets/invalidMove.wav</file>
+        <file alias="flowerLoseShort.wav">assets/flowerLoseShort.wav</file>
+        <file alias="flowerLoseMedium.wav">assets/flowerLoseMedium.wav</file>
+        <file alias="flowerLoseLong.wav">assets/flowerLoseLong.wav</file>
         <file alias="dbButtonClickFlag.wav">assets/dbButtonClickFlag.wav</file>
-        <file alias="mineBombStart.wav">assets/mineBombStart.wav</file>
-        <file alias="mineBombRun.wav">assets/mineBombRun.wav</file>
-        <file alias="mineBombEnd.wav">assets/mineBombEnd.wav</file>
     </qresource>
 </RCC>

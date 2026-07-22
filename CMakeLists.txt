@@ -16,6 +16,7 @@ add_executable(minesweeper
     src/game/Statistics.cpp
     src/ui/MainWindow.cpp
     src/ui/BoardWidget.cpp
+    src/ui/AppearanceDialog.cpp
     src/ui/OptionsDialog.cpp
     src/ui/ResultDialog.cpp
     src/ui/StatisticsDialog.cpp

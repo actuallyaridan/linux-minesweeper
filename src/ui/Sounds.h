@@ -1,83 +1,87 @@
 #pragma once
 
-// The original Windows 7 Minesweeper sounds (from the same Lmy0217 assets as
-// the sprites), mapped the way that game plays them:
+// The original Windows 7 Minesweeper sounds, mapped to the roles the
+// game's own MINESWEEPER.xml gives them:
 //
-//  firstPaint.wav          a new board being dealt
-//  zeroDevelop.wav         a flood-open rippling across empty squares
-//  dbButtonClickFlag.wav   planting or clearing a flag
-//  mineBombStart/Run/End   the loss explosion, three samples chained
+//  gameStart.wav        NewBoard      a fresh board being dealt
+//  tileSingle.wav       SingleReveal  one square opening
+//  tileMultiple.wav     MultiReveal   a flood opening several squares
+//  gameWin.wav          BoardCleared  the board is cleared
+//  gameLose.wav         WrongGuess    a mine detonating; the original keeps
+//                                     30 buffers so cascading mines overlap,
+//                                     mirrored here with a small pool
+//  invalidMove.wav      InvalidMove   a click that can't do anything
+//  flowerLose*.wav      WrongGuess    the Flower Garden loss, one sample
+//                                     only (PlayOnlyFirstLoseSound), sized
+//                                     to the cascade
+//  dbButtonClickFlag.wav              planting or clearing a flag
 //
-// Header-only and moc-free: QSoundEffect is already a QObject, so the chain
-// connections just borrow its signals.
+// Header-only and moc-free; QSoundEffect is already a QObject.
 
-#include <QObject>
 #include <QSoundEffect>
 #include <QUrl>
 
 class Sounds {
 public:
+    enum class LoseStyle { Mines, Flowers };
+
     Sounds()
     {
-        setup(m_newGame, "firstPaint.wav");
-        setup(m_flood, "zeroDevelop.wav");
+        setup(m_newGame, "gameStart.wav");
+        setup(m_single, "tileSingle.wav");
+        setup(m_multi, "tileMultiple.wav");
+        setup(m_win, "gameWin.wav");
+        setup(m_invalid, "invalidMove.wav");
         setup(m_flag, "dbButtonClickFlag.wav");
-        setup(m_boomStart, "mineBombStart.wav");
-        setup(m_boomRun, "mineBombRun.wav");
-        setup(m_boomEnd, "mineBombEnd.wav");
-
-        // The staged explosion: each sample starts when the previous one
-        // finishes, unless stopAll() (a new game) broke the chain.
-        QObject::connect(&m_boomStart, &QSoundEffect::playingChanged,
-                         &m_boomStart, [this] {
-            if (!m_boomStart.isPlaying() && m_chainStage == 1) {
-                m_chainStage = 2;
-                m_boomRun.play();
-            }
-        });
-        QObject::connect(&m_boomRun, &QSoundEffect::playingChanged,
-                         &m_boomRun, [this] {
-            if (!m_boomRun.isPlaying() && m_chainStage == 2) {
-                m_chainStage = 0;
-                m_boomEnd.play();
-            }
-        });
+        setup(m_flowerShort, "flowerLoseShort.wav");
+        setup(m_flowerMedium, "flowerLoseMedium.wav");
+        setup(m_flowerLong, "flowerLoseLong.wav");
+        for (QSoundEffect &e : m_losePool)
+            setup(e, "gameLose.wav");
     }
 
     void setEnabled(bool on) { m_enabled = on; }
     bool enabled() const { return m_enabled; }
+    void setLoseStyle(LoseStyle s) { m_loseStyle = s; }
 
     void newGame() { play(m_newGame); }
-    void flood() { play(m_flood); }
+    void singleReveal() { play(m_single); }
+    void multiReveal() { play(m_multi); }
     void flag() { play(m_flag); }
+    void win() { play(m_win); }
+    void invalidMove() { play(m_invalid); }
 
-    // `followUpMines` is how many mines detonate after the first one: the
-    // run sample loops once per mine while the cascade plays them out.
-    void explosion(int followUpMines)
+    // The loss is starting; `doomedMines` is how many will detonate after
+    // the first. Flower Garden plays one wilting sample sized to the
+    // cascade and nothing per-mine; Minesweeper booms on every trip.
+    void beginLoss(int doomedMines)
     {
-        if (!m_enabled)
-            return;
-        m_boomRun.setLoopCount(qMax(1, followUpMines));
-        m_chainStage = 1;
-        m_boomStart.play();
+        if (m_loseStyle == LoseStyle::Flowers) {
+            play(doomedMines <= 10   ? m_flowerShort
+                 : doomedMines <= 40 ? m_flowerMedium
+                                     : m_flowerLong);
+        } else {
+            mineTripped();
+        }
     }
 
-    // The cascade animation is over (or was skipped): cut the remaining run
-    // loops short and let the chain drop straight to the closing boom.
-    void finishExplosion()
+    // Another mine (or ring of mines) went off mid-cascade.
+    void mineTripped()
     {
-        if (m_chainStage == 2 && m_boomRun.isPlaying())
-            m_boomRun.stop();
-        else if (m_chainStage == 1)
-            m_boomRun.setLoopCount(1);
+        if (!m_enabled || m_loseStyle == LoseStyle::Flowers)
+            return;
+        m_losePool[m_nextLose].play();   // overlaps earlier booms
+        m_nextLose = (m_nextLose + 1) % kLosePool;
     }
 
     void stopAll()
     {
-        m_chainStage = 0;
-        for (QSoundEffect *e : {&m_newGame, &m_flood, &m_flag, &m_boomStart,
-                                &m_boomRun, &m_boomEnd})
+        for (QSoundEffect *e : {&m_newGame, &m_single, &m_multi, &m_win,
+                                &m_invalid, &m_flag, &m_flowerShort,
+                                &m_flowerMedium, &m_flowerLong})
             e->stop();
+        for (QSoundEffect &e : m_losePool)
+            e.stop();
     }
 
 private:
@@ -95,8 +99,12 @@ private:
         }
     }
 
-    QSoundEffect m_newGame, m_flood, m_flag;
-    QSoundEffect m_boomStart, m_boomRun, m_boomEnd;
-    int m_chainStage = 0;
+    static constexpr int kLosePool = 4;
+
+    QSoundEffect m_newGame, m_single, m_multi, m_win, m_invalid, m_flag;
+    QSoundEffect m_flowerShort, m_flowerMedium, m_flowerLong;
+    QSoundEffect m_losePool[kLosePool];
+    int m_nextLose = 0;
+    LoseStyle m_loseStyle = LoseStyle::Mines;
     bool m_enabled = true;
 };

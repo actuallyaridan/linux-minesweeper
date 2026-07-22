@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "AppearanceDialog.h"
 #include "Board.h"
 #include "BoardWidget.h"
 #include "OptionsDialog.h"
@@ -38,16 +39,28 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     connect(m_board, &Board::gameEnded, this, &MainWindow::onGameEnded);
     connect(m_board, &Board::cellsOpened, this,
             [this](const QVector<QPoint> &order) {
-        if (order.size() > 1)   // single reveals are silent, like the original
-            m_sounds.flood();
+        // The original's SingleReveal / MultiReveal pair.
+        if (order.size() > 1)
+            m_sounds.multiReveal();
+        else if (order.size() == 1)
+            m_sounds.singleReveal();
     });
     connect(m_board, &Board::markToggled, this, [this] { m_sounds.flag(); });
+    connect(m_boardWidget, &BoardWidget::mineTripped, this,
+            [this] { m_sounds.mineTripped(); });
+    connect(m_boardWidget, &BoardWidget::invalidMove, this,
+            [this] { m_sounds.invalidMove(); });
     connect(m_boardWidget, &BoardWidget::explosionFinished, this, [this] {
-        m_sounds.finishExplosion();
-        // A beat to take in the smoking crater before the dialog covers it.
+        // A beat to take in the smoking craters before the dialog covers them.
         QTimer::singleShot(250, this, [this] {
             if (m_board->state() == Board::State::Lost)
                 showEndDialog(false, false);
+        });
+    });
+    connect(m_boardWidget, &BoardWidget::winFinished, this, [this] {
+        QTimer::singleShot(250, this, [this] {
+            if (m_board->state() == Board::State::Won)
+                showEndDialog(true, m_lastRecord);
         });
     });
 
@@ -125,6 +138,8 @@ void MainWindow::buildMenus()
                     this, &MainWindow::showStatistics);
     game->addAction(tr("&Options"), QKeySequence(Qt::Key_F5),
                     this, &MainWindow::showOptions);
+    game->addAction(tr("&Change Appearance"), QKeySequence(Qt::Key_F7),
+                    this, &MainWindow::showAppearance);
     game->addSeparator();
     game->addAction(tr("E&xit"), this, &MainWindow::close);
 
@@ -167,6 +182,22 @@ void MainWindow::loadSettings()
     m_sounds.setEnabled(s.value("sounds", true).toBool());
     m_animations = s.value("animations", true).toBool();
     m_boardWidget->setAnimationsEnabled(m_animations);
+
+    m_boardStyle = s.value("boardStyle") == QLatin1String("green")
+                       ? Theme::BoardStyle::Green
+                       : Theme::BoardStyle::Blue;
+    m_gameStyle = s.value("gameStyle") == QLatin1String("flowers")
+                      ? Theme::GameStyle::Flowers
+                      : Theme::GameStyle::Mines;
+    applyStyles();
+}
+
+void MainWindow::applyStyles()
+{
+    m_boardWidget->setStyles(m_boardStyle, m_gameStyle);
+    m_sounds.setLoseStyle(m_gameStyle == Theme::GameStyle::Flowers
+                              ? Sounds::LoseStyle::Flowers
+                              : Sounds::LoseStyle::Mines);
 }
 
 void MainWindow::newGame()
@@ -200,19 +231,20 @@ void MainWindow::onGameStarted()
 void MainWindow::onGameEnded(bool won)
 {
     m_timer->stop();
-    bool record = false;
+    m_lastRecord = false;
     // Custom games are not recorded, matching Windows 7.
     if (m_difficulty.id != QLatin1String("custom"))
-        record = Stats::recordGame(m_difficulty.id, won, m_seconds);
+        m_lastRecord = Stats::recordGame(m_difficulty.id, won, m_seconds);
 
     if (won) {
-        // Let the auto-planted flags be seen for a beat before the dialog.
-        QTimer::singleShot(400, this, [this, record] {
-            showEndDialog(true, record);
-        });
+        // The scan bar sweeps the field and the mines disarm; the won
+        // dialog waits for winFinished() (immediate with animations off).
+        m_sounds.win();
+        m_boardWidget->playWin();
     } else {
-        // The run sample loops once per mine still to blow; the game-lost
-        // dialog waits for the board widget's cascade to finish.
+        // The first boom sounds now; the cascade's other mines answer
+        // through mineTripped(), and the lost dialog waits for the board
+        // widget's cascade to finish.
         int doomed = 0;
         for (int r = 0; r < m_board->rows(); ++r)
             for (int c = 0; c < m_board->cols(); ++c) {
@@ -220,7 +252,7 @@ void MainWindow::onGameEnded(bool won)
                 if (cell.mine && cell.mark != Mark::Flag && !cell.exploded)
                     ++doomed;
             }
-        m_sounds.explosion(doomed);
+        m_sounds.beginLoss(doomed);
     }
 }
 
@@ -285,6 +317,23 @@ void MainWindow::showOptions()
         resizeToDefault();
 }
 
+void MainWindow::showAppearance()
+{
+    AppearanceDialog dlg(m_boardStyle, m_gameStyle, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    m_boardStyle = dlg.boardStyle();
+    m_gameStyle = dlg.gameStyle();
+    applyStyles();   // takes effect immediately, like the original
+
+    QSettings s;
+    s.setValue("boardStyle",
+               m_boardStyle == Theme::BoardStyle::Green ? "green" : "blue");
+    s.setValue("gameStyle",
+               m_gameStyle == Theme::GameStyle::Flowers ? "flowers" : "mines");
+}
+
 void MainWindow::showStatistics()
 {
     StatisticsDialog dlg(m_difficulty.id, this);
@@ -314,7 +363,11 @@ void MainWindow::showAbout()
     QDialog dlg(this);
     dlg.setWindowTitle(tr("About Minesweeper"));
     dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    dlg.setFixedWidth(340);
+    // The dialog fits itself to its content (SetFixedSize below), so the
+    // width is pinned by capping the wrapped paragraphs rather than the
+    // dialog: a word-wrapped QLabel otherwise reports its whole unwrapped
+    // line as its preferred width and drags the dialog out wide.
+    constexpr int kTextWidth = 316;   // 340 dialog minus the 12px margins
 
     auto *iconLabel = new QLabel;
     iconLabel->setFixedSize(64, 64);
@@ -323,7 +376,7 @@ void MainWindow::showAbout()
 
     auto *nameLabel = new QLabel(tr("Minesweeper"));
     auto *companyLabel = new QLabel(QStringLiteral("@actuallyaridan"));
-    auto *versionLabel = new QLabel(tr("Version: 1.0.0"));
+    auto *versionLabel = new QLabel(tr("Version: 2.0.0"));
 
     auto *infoLayout = new QVBoxLayout;
     infoLayout->addWidget(nameLabel);
@@ -345,16 +398,19 @@ void MainWindow::showAbout()
         tr("Clear the minefield without detonating any of the hidden mines. "
            "Left-click a square to uncover it, right-click to flag a mine."));
     descLabel->setWordWrap(true);
+    descLabel->setFixedWidth(kTextWidth);
     descLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     descLabel->setContentsMargins(4, 4, 4, 4);
 
     auto *creditsLabel = new QLabel(
-        tr("Recreated in Linux with Qt6, using the original Windows 7 artwork "
-           "and sounds (extracted by the Lmy0217/Minesweeper project). Best "
+        tr("Recreated in Linux with Qt6, using the original Windows 7 artwork, "
+           "animations and sounds, extracted from the game's own executable "
+           "and DLL (frame backdrop via the Lmy0217/Minesweeper project). Best "
            "enjoyed with AeroThemePlasma. Any Microsoft branding is used "
            "solely for referential use only, and does not aim to usurp "
            "copyrights from Microsoft."));
     creditsLabel->setWordWrap(true);
+    creditsLabel->setFixedWidth(kTextWidth);
     creditsLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     creditsLabel->setContentsMargins(4, 4, 4, 4);
 
