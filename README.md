@@ -10,6 +10,30 @@
 </div>
 <br>
 
+> [!NOTE]
+> **Built for CachyOS / Arch Linux.** Only Qt6 Widgets and Multimedia (for the sounds) are required, so this should build unchanged on any distro with Qt6 packages.
+
+| | | |
+|:-------------------------:|:-------------------------:|:-------------------------:|
+| <img src="./screenshots/blue.png" alt="A Beginner board mid-game in the blue theme, showing the Windows 7 frame, the numbered tiles, and the time and mine counters."> | <img src="./screenshots/bosnia.png" alt="The Bosnia difficulty: a 24x30 board with 192 mines, played under a faint Bosnian flag."> | <img src="./screenshots/green.png" alt="The same board in the green theme, one of the selectable appearances."> |
+
+## Installation
+
+### Arch / CachyOS (AUR)
+
+```bash
+yay -S linux-minesweeper
+```
+
+### Pre-built binaries
+
+Download the latest binary for your architecture from the [Releases](https://github.com/actuallyaridan/linux-minesweeper/releases/latest) page and place it somewhere in your `$PATH`:
+
+```bash
+chmod +x MineSweeper-x86_64
+sudo mv MineSweeper-x86_64 /usr/local/bin/MineSweeper
+```
+
 ## Building
 
 ```bash
@@ -18,8 +42,6 @@ cmake -B build
 cmake --build build -j
 ./build/MineSweeper
 ```
-
-Only Qt6 Widgets and Multimedia (for the sounds) are required, so this should build unchanged on any distro with Qt6 packages.
 
 ## Features
 
