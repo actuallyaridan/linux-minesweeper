@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake qt6-base-dev qt6-multimedia-dev libgl1-mesa-dev
+
+      - name: Build
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+  pkgbuild:
+    name: Check PKGBUILD
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The PKGBUILD is only exercised at release time otherwise, so a typo
+      # would sit undetected until it broke a publish.
+      - name: Parse PKGBUILD
+        run: |
+          docker run --rm -v "$PWD/aur:/pkg" -w /pkg archlinux:base-devel bash -c '
+            useradd -m builder
+            chown -R builder /pkg
+            su builder -c "makepkg --printsrcinfo"
+          '

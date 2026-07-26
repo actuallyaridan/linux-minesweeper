@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake qt6-base-dev qt6-multimedia-dev libgl1-mesa-dev
+
+      - name: Build
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: Rename binary
+        run: cp build/MineSweeper MineSweeper-${{ matrix.arch }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: MineSweeper-${{ matrix.arch }}
+
+  aur:
+    name: Publish to AUR
+    needs: build
+    runs-on: ubuntu-latest
+
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Render PKGBUILD for this release
+        run: |
+          VER="${TAG#v}"
+          URL="${{ github.server_url }}/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          SUM="$(curl -fsSL "$URL" | sha256sum | cut -d' ' -f1)"
+          mkdir -p out
+          sed -e "s|^pkgver=.*|pkgver=${VER}|" \
+              -e "s|^sha256sums=.*|sha256sums=('${SUM}')|" \
+              aur/PKGBUILD > out/PKGBUILD
+          # Fail loudly rather than publishing a placeholder to the AUR
+          grep -q "^pkgver=${VER}$" out/PKGBUILD
+          grep -q "^sha256sums=('${SUM}')$" out/PKGBUILD
+          cat out/PKGBUILD
+
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD/out:/pkg" -w /pkg archlinux:base-devel bash -c '
+            useradd -m builder
+            chown -R builder /pkg
+            su builder -c "makepkg --printsrcinfo" > .SRCINFO
+          '
+          cat out/.SRCINFO
+
+      - name: Push to AUR
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AUR_SSH_KEY }}" > ~/.ssh/aur_id_ed25519
+          chmod 600 ~/.ssh/aur_id_ed25519
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config << 'EOF'
+          Host aur.archlinux.org
+            IdentityFile ~/.ssh/aur_id_ed25519
+            User aur
+          EOF
+          git clone ssh://aur@aur.archlinux.org/linux-minesweeper.git aur-repo
+          cd aur-repo
+          cp ../out/PKGBUILD ../out/.SRCINFO .
+          git config user.name "actuallyaridan"
+          git config user.email "adnan@aridan.net"
+          # Works whether the AUR package already exists or is brand new
+          git symbolic-ref HEAD refs/heads/master
+          git add PKGBUILD .SRCINFO
+          git diff --cached --quiet || git commit -m "Update to ${TAG}"
+          git push origin HEAD:master
