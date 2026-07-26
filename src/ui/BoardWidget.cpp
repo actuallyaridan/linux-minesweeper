@@ -8,8 +8,8 @@
 #include <QPainter>
 #include <QTimer>
 
-#include <algorithm>
 #include <climits>
+#include <cmath>
 
 namespace {
 
@@ -20,7 +20,7 @@ constexpr int kDefaultCell = Theme::kTile;
 constexpr int kMinCell = 12;       // cells stay clickable when shrunk
 
 constexpr int kTickMs = 30;        // shared animation clock, ~one frame per tick
-constexpr int kRingStagger = 3;    // ticks between explosion distance rings
+constexpr int kRingStagger = 5;    // shockwave speed: ticks per cell of distance
 constexpr int kIntroMs = 700;      // deal-in wave spread; Win7's 1100ms drags
 
 // A flood-open melts outward from the click: the ripple ring advances a
@@ -182,37 +182,25 @@ void BoardWidget::startExplosion()
             if (m_board->at(r, c).exploded)
                 centre = QPoint(c, r);
 
-    // ...then the rest go off in rings radiating outward from it, every
-    // mine in a ring together, like the original's breadth-first cascade.
-    // Ring numbers are compressed so mine-free rings don't add dead time.
-    QVector<int> rings;
+    // ...then a shockwave radiates outward at constant speed and each
+    // mine goes off when it arrives, like the original: mines far apart
+    // get proportionally long pauses between their booms, because the
+    // empty distance in between is the delay.
+    m_boomEnd = kTripTicks;
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
             const Cell &cell = m_board->at(r, c);
             if (!cell.mine || cell.mark == Mark::Flag)
                 continue;
-            if (cell.exploded) {
-                m_boomStart[r * cols + c] = 0;
-            } else {
-                const int ring = qMax(qAbs(r - centre.y()),
-                                      qAbs(c - centre.x()));
-                m_boomStart[r * cols + c] = -2 - ring;   // patched below
-                if (!rings.contains(ring))
-                    rings.append(ring);
+            int start = 0;
+            if (!cell.exploded) {
+                const qreal dist = std::hypot(r - centre.y(),
+                                              c - centre.x());
+                start = qMax(1, qRound(dist * kRingStagger));
+                if (!m_ringStarts.contains(start))
+                    m_ringStarts.append(start);
             }
-        }
-    }
-    std::sort(rings.begin(), rings.end());
-    // Each ring's mines explode together, and the cascade is over when
-    // the last explosion has burnt through its second.
-    m_boomEnd = kTripTicks;
-    for (int i = 0; i < m_boomStart.size(); ++i) {
-        if (m_boomStart[i] <= -2) {
-            const int ring = -2 - m_boomStart[i];
-            const int start = kRingStagger * (1 + int(rings.indexOf(ring)));
-            m_boomStart[i] = start;
-            if (!m_ringStarts.contains(start))
-                m_ringStarts.append(start);
+            m_boomStart[r * cols + c] = start;
             m_boomEnd = qMax(m_boomEnd, start + kTripTicks);
         }
     }
@@ -482,8 +470,8 @@ const BoardWidget::SpriteSet &BoardWidget::sprites() const
     const qreal f = qreal(cell) / Theme::kTile;
     for (int n = 1; n <= 8; ++n)
         S.digits[n - 1] = cutSprite(board, Theme::digit(n),
-                                    QSize(qMax(2, qRound(10 * f)),
-                                          qMax(2, qRound(13 * f))));
+                                    QSize(qMax(2, qRound(12 * f)),
+                                          qMax(2, qRound(15 * f))));
     return S;
 }
 

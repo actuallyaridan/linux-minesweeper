@@ -16,7 +16,7 @@
 sudo pacman -S qt6-base qt6-multimedia cmake
 cmake -B build
 cmake --build build -j
-./build/minesweeper
+./build/MineSweeper
 ```
 
 Only Qt6 Widgets and Multimedia (for the sounds) are required, so this should build unchanged on any distro with Qt6 packages.

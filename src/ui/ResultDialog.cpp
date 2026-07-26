@@ -43,7 +43,8 @@ ResultDialog::ResultDialog(bool won, int seconds, bool record,
     }
 
     auto *link = new QLabel(QStringLiteral(
-        "<a href=\"https://github.com/actuallyaridan/linux-minesweeper\">%1</a>")
+        "<a href=\"https://github.com/actuallyaridan/linux-minesweeper"
+        "#part-of-the-wsl-windows-alike-software-for-linux-series\">%1</a>")
         .arg(tr("Get More Games Online")));
     link->setOpenExternalLinks(true);
     link->setAlignment(Qt::AlignHCenter);

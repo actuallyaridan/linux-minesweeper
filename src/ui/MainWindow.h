@@ -9,6 +9,7 @@
 class QTimer;
 class Board;
 class BoardWidget;
+class HelpDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -41,6 +42,7 @@ private:
 
     Board *m_board;
     BoardWidget *m_boardWidget;
+    HelpDialog *m_help = nullptr;
     QTimer *m_timer;
     Sounds m_sounds;
     int m_seconds = 0;

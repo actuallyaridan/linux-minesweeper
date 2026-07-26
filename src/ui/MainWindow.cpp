@@ -3,6 +3,7 @@
 #include "AppearanceDialog.h"
 #include "Board.h"
 #include "BoardWidget.h"
+#include "HelpDialog.h"
 #include "OptionsDialog.h"
 #include "ResultDialog.h"
 #include "Statistics.h"
@@ -342,20 +343,13 @@ void MainWindow::showStatistics()
 
 void MainWindow::showHelp()
 {
-    QMessageBox::information(
-        this, tr("Minesweeper Help"),
-        tr("The goal of Minesweeper is to uncover every square that does not "
-           "hide a mine.\n\n"
-           "• Left-click a square to reveal it. The first square you "
-           "reveal is never a mine.\n"
-           "• Right-click to flag a square you think is mined; "
-           "right-click again for a question mark.\n"
-           "• A number shows how many mines touch that square.\n"
-           "• Once a number has all its mines flagged, click it with the "
-           "middle button (or both buttons) to clear its remaining "
-           "neighbours.\n\n"
-           "Clear the whole field without setting off a mine to win. Good "
-           "luck!"));
+    // Modeless and reused, like the original help viewer: F1 raises the
+    // same window instead of stacking copies.
+    if (!m_help)
+        m_help = new HelpDialog(this);
+    m_help->show();
+    m_help->raise();
+    m_help->activateWindow();
 }
 
 void MainWindow::showAbout()
@@ -376,7 +370,7 @@ void MainWindow::showAbout()
 
     auto *nameLabel = new QLabel(tr("Minesweeper"));
     auto *companyLabel = new QLabel(QStringLiteral("@actuallyaridan"));
-    auto *versionLabel = new QLabel(tr("Version: 2.0.0"));
+    auto *versionLabel = new QLabel(tr("Version: 2.0.1"));
 
     auto *infoLayout = new QVBoxLayout;
     infoLayout->addWidget(nameLabel);

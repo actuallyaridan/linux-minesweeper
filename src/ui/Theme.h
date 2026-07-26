@@ -61,18 +61,15 @@ inline const QPixmap &otherSheet()
 
 // The tile gradient: 720 frames laid out 25 per sheet row, one frame per
 // cell of the maximum 30x24 board, running light (top left) to dark
-// (bottom right). Smaller boards sample the full gradient proportionally,
-// so every board sweeps the same range of colours as the original.
+// (bottom right). A smaller board takes a centred window into the
+// gradient, so its tiles keep the original's medium blues rather than
+// sliding to the washed-out corner or stretching the whole range.
 constexpr int kGradCols = 30, kGradRows = 24;
 
 inline int gradientFrame(int row, int col, int rows, int cols)
 {
-    const int r = rows > 1 ? (row * (kGradRows - 1) + (rows - 1) / 2)
-                                 / (rows - 1)
-                           : 0;
-    const int c = cols > 1 ? (col * (kGradCols - 1) + (cols - 1) / 2)
-                                 / (cols - 1)
-                           : 0;
+    const int r = qMin(kGradRows - 1, row + qMax(0, (kGradRows - rows) / 2));
+    const int c = qMin(kGradCols - 1, col + qMax(0, (kGradCols - cols) / 2));
     return r * kGradCols + c;
 }
 
@@ -97,9 +94,11 @@ constexpr QRect kMisflagX{460, 560, 18, 18};
 constexpr QRect kShadowU{480, 560, 18, 3};
 constexpr QRect kShadowL{1012, 0, 3, 18};
 
+// Digits 1-8, re-slotted by build_sheets.py: the real glyphs overflow the
+// XML's 10x13, so each sits centred in a 12x15 slot.
 inline QRect digit(int n)   // 1..8
 {
-    return {1000, 13 * (n - 1), 10, 13};
+    return {1000, 15 * (n - 1), 12, 15};
 }
 
 constexpr QRect kCounterPanel{0, 580, 40, 21};

@@ -3,6 +3,8 @@
 #include "MainWindow.h"
 #ifdef MINESWEEPER_DEMO
 #include <QMenuBar>
+#include <QAbstractScrollArea>
+#include <QScrollBar>
 #endif
 
 #ifdef MINESWEEPER_DEMO
@@ -27,18 +29,36 @@ static void runDemo(MainWindow *w)
         QTimer::singleShot(t += ms, fn);
     };
     if (qEnvironmentVariableIsSet("MINESWEEPER_DEMO_ABOUT")
-        || qEnvironmentVariableIsSet("MINESWEEPER_DEMO_APPEAR")) {
-        // Grab the modal dialog from inside its own nested exec loop.
-        QTimer::singleShot(600, [] {
-            if (QWidget *dlg = QApplication::activeModalWidget()) {
+        || qEnvironmentVariableIsSet("MINESWEEPER_DEMO_APPEAR")
+        || qEnvironmentVariableIsSet("MINESWEEPER_DEMO_HELP")) {
+        // Grab the dialog: the modal ones from inside their nested exec
+        // loop, the modeless help from the top-level list.
+        QTimer::singleShot(600, [w] {
+            QWidget *dlg = QApplication::activeModalWidget();
+            if (!dlg) {
+                for (QWidget *top : QApplication::topLevelWidgets())
+                    if (top->isVisible() && top != w
+                        && top->inherits("QDialog"))
+                        dlg = top;
+            }
+            if (dlg) {
                 dlg->grab().save("/tmp/demo_dialog.png");
                 qInfo("dialog size: %dx%d", dlg->width(), dlg->height());
+                // for scrollable dialogs, also grab the bottom of the page
+                if (auto *sa = dlg->findChild<QAbstractScrollArea *>()) {
+                    sa->verticalScrollBar()->setValue(
+                        sa->verticalScrollBar()->maximum());
+                    dlg->grab().save("/tmp/demo_dialog_end.png");
+                }
             }
             QApplication::quit();
         });
-        const QString want = qEnvironmentVariableIsSet("MINESWEEPER_DEMO_APPEAR")
-                                 ? QStringLiteral("Appearance")
-                                 : QStringLiteral("About");
+        const QString want =
+            qEnvironmentVariableIsSet("MINESWEEPER_DEMO_APPEAR")
+                ? QStringLiteral("Appearance")
+            : qEnvironmentVariableIsSet("MINESWEEPER_DEMO_HELP")
+                ? QStringLiteral("View Help")
+                : QStringLiteral("About");
         at(300, [w, want] {
             for (QMenu *menu : w->menuBar()->findChildren<QMenu *>())
                 for (QAction *a : menu->actions())
