@@ -50,7 +50,7 @@ cmake --build build -j
 - The Windows 7 animations: every new board deals itself in with tiles popping up in waves from the corners, floods ripple open outward, and losing sets off the full mine cascade - the hit mine detonates first, the rest go off in rings radiating out from it (click to skip)
 - The Windows 7 rules: the first square you reveal is never a mine, flags and question marks, chording (middle-click or both buttons on a satisfied number), auto-flagging on a win
 - Beginner (9×9, 10), Intermediate (16×16, 40), and Advanced (16×30, 99) presets plus custom boards up to 24×30 with 668 mines
-- A **Bosnia** difficulty (24×30, 192 mines): technically beatable, statistically a war crime - played under a faint Bosnian flag painted over the minefield
+- A **Bosnia** difficulty (24×30, 192 mines): technically beatable, statistically a war crime - played under a faint Bosnian flag painted over the minefield. My parents are from there, one of the most landmine-contaminated countries in the world; see if you can clear it faster than the real demining teams, thirty years in and still going
 - Per-difficulty lifetime statistics: games played/won, win percentage, best time, and streaks
 - The board scales with the window, like the original
 - Win/lose dialogs with "Play again", and your difficulty and options are remembered across launches
